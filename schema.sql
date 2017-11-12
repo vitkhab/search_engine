@@ -13,6 +13,7 @@ CREATE TABLE tbl_Pages
 (	
 	ID SERIAL PRIMARY KEY
 	,Page CHARACTER VARYING 
+	,Checked INT  
 );
 
 CREATE TABLE tbl_Words_Pages

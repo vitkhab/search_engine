@@ -3,20 +3,25 @@ from requests import get
 from argparse import ArgumentParser
 from re import findall
 from functools import lru_cache
-import postgresql
-import pika
+from time import time
+from postgresql import open as pg_open
+from pika import BlockingConnection, ConnectionParameters
 
-db = postgresql.open('pq://postgres:postgres@postgres:5432/postgres')
+CHECK_INTERVAL = 86400
+
+db = pg_open('pq://postgres:postgres@postgres:5432/postgres')
 get_word_id = db.prepare('SELECT ID FROM tbl_Words WHERE Word = $1;')
 new_word = db.prepare('INSERT INTO tbl_Words (Word) VALUES ($1)')
 new_word_page = db.prepare('INSERT INTO tbl_Words_Pages VALUES ($1, $2)')
 get_word_page = db.prepare('SELECT * FROM tbl_Words_Pages WHERE WordID = $1 AND PageID = $2')
+get_page = db.prepare('SELECT (ID, Checked) FROM tbl_Pages WHERE Page = $1;')
 get_page_id = db.prepare('SELECT ID FROM tbl_Pages WHERE Page = $1;')
 new_page = db.prepare('INSERT INTO tbl_Pages (Page) VALUES ($1)')
+check_page = db.prepare('UPDATE tbl_Pages SET Checked = $2 WHERE ID = $1;')
 new_page_page = db.prepare('INSERT INTO tbl_Pages_Pages VALUES ($1, $2)')
 get_page_page = db.prepare('SELECT * FROM tbl_Pages_Pages WHERE PageID = $1 AND ReferenceID = $2')
 
-rabbit = pika.BlockingConnection(pika.ConnectionParameters(host='rabbit'))
+rabbit = BlockingConnection(ConnectionParameters(host='rabbit'))
 channel = rabbit.channel()
 channel.queue_declare(queue='urls')
 
@@ -55,6 +60,14 @@ def getsert_page_id(page):
     return page_id[0][0]
 
 @lru_cache(maxsize=2**32)
+def getsert_page(page):
+    page_attrs = get_page(page)
+    if not page_attrs:
+        new_page(page)
+        page_attrs = get_page(page)
+    return (page_attrs[0][0][0], page_attrs[0][0][1])
+
+@lru_cache(maxsize=2**32)
 def getsert_word_id(word):
     word_id = get_word_id(word)
     if not word_id:
@@ -76,40 +89,36 @@ def prepare_url(new_url, url):
 def callback(ch, method, properties, body):
     url = body.decode('utf-8')
     print("Parsing %r" % url)
-    (words, urls) = parse_page(url)
-    print(url, words)
-    parsed.append(url)
 
-    page_id = getsert_page_id(url)
+    (page_id, checked) = getsert_page(url)
+    if not checked or time() - checked > CHECK_INTERVAL:
+        (words, urls) = parse_page(url)
+        for word in words:
+            word_id = getsert_word_id(word)
+            if not get_word_page(word_id, page_id):
+                new_word_page(word_id, page_id)
 
-    for word in words:
-        word_id = getsert_word_id(word)
-        if not get_word_page(word_id, page_id):
-            new_word_page(word_id, page_id)
-
-    for new_url in urls:
-        new_url = prepare_url(new_url, url)
-        if new_url not in parsed:
+        for new_url in urls:
+            new_url = prepare_url(new_url, url)
             channel.basic_publish(exchange='',
-                      routing_key='urls',
-                      body=new_url)
+                        routing_key='urls',
+                        body=new_url)
 
-        
-        new_page_id = getsert_page_id(new_url)
-        if not get_page_page(new_page_id, page_id):
-            new_page_page(new_page_id, page_id)
+            new_page_id = getsert_page_id(new_url)
+            if not get_page_page(new_page_id, page_id):
+                new_page_page(new_page_id, page_id)
+
+    channel.basic_ack(method.delivery_tag)
+    check_page(page_id, int(time()))
 
 if __name__ == "__main__":
     parser = ArgumentParser(description='Simple web crawler')
     parser.add_argument('url', help='URL to start')
     args = parser.parse_args()
 
-    parsed = []
-
     channel.basic_publish(exchange='',
             routing_key='urls',
             body=args.url)
     channel.basic_consume(callback,
-                      queue='urls',
-                      no_ack=True)
+                      queue='urls')
     channel.start_consuming()
