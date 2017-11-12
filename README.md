@@ -5,9 +5,9 @@
 ```
 docker-compose up -d postgres
 docker exec -i searchengine_postgres_1 psql -U postgres < schema.sql
-docker-compose up --build --scale crawler=3
+docker-compose up --build --scale crawler=3 --scale web=3
 ```
 ## Later runs
 ```
-docker-compose up --build --scale crawler=3
+docker-compose up --build --scale crawler=3 --scale web=3
 ```
