@@ -43,9 +43,11 @@ if __name__ == "__main__":
         get_word_id = db.prepare('SELECT ID FROM tbl_Words WHERE Word = $1;')
         new_word = db.prepare('INSERT INTO tbl_Words (Word) VALUES ($1)')
         new_word_page = db.prepare('INSERT INTO tbl_Words_Pages VALUES ($1, $2)')
+        get_word_page = db.prepare('SELECT * FROM tbl_Words_Pages WHERE WordID = $1 AND PageID = $2')
         get_page_id = db.prepare('SELECT ID FROM tbl_Pages WHERE Page = $1;')
         new_page = db.prepare('INSERT INTO tbl_Pages (Page) VALUES ($1)')
         new_page_page = db.prepare('INSERT INTO tbl_Pages_Pages VALUES ($1, $2)')
+        get_page_page = db.prepare('SELECT * FROM tbl_Pages_Pages WHERE PageID = $1 AND ReferenceID = $2')
 
         while to_parse:
             url = to_parse.pop()
@@ -65,7 +67,8 @@ if __name__ == "__main__":
                     new_word(word)
                     word_id = get_word_id(word)
                 word_id = word_id[0][0]
-                new_word_page(word_id, page_id)
+                if not get_word_page(word_id, page_id):
+                    new_word_page(word_id, page_id)
 
             for new_url in urls:
                 if new_url.startswith('http'):
@@ -78,3 +81,11 @@ if __name__ == "__main__":
                     new_url = url.strip('/') + '/' + new_url
                 if new_url not in parsed:
                     to_parse.append(new_url)
+                
+                new_page_id = get_page_id(new_url)
+                if not new_page_id:
+                    new_page(new_url)
+                    new_page_id = get_page_id(new_url)
+                new_page_id = new_page_id[0][0]
+                if not get_page_page(page_id, new_page_id):
+                    new_page_page(page_id, new_page_id)
