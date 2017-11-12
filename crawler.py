@@ -57,6 +57,17 @@ def getsert_word_id(word):
         word_id = get_word_id(word)
     return word_id[0][0]
 
+def prepare_url(new_url, url):
+    if new_url.startswith('http'):
+        pass
+    elif new_url.startswith('//'):
+        new_url = 'http:' + new_url
+    elif new_url.startswith('/'):
+        new_url = '/'.join(url.split('/')[0:3]) + new_url
+    else:
+        new_url = url.strip('/') + '/' + new_url
+    return new_url
+
 if __name__ == "__main__":
     parser = ArgumentParser(description='Simple web crawler')
     parser.add_argument('url', help='URL to start')
@@ -79,14 +90,7 @@ if __name__ == "__main__":
                 new_word_page(word_id, page_id)
 
         for new_url in urls:
-            if new_url.startswith('http'):
-                pass
-            elif new_url.startswith('//'):
-                new_url = 'http:' + new_url
-            elif new_url.startswith('/'):
-                new_url = '/'.join(url.split('/')[0:3]) + new_url
-            else:
-                new_url = url.strip('/') + '/' + new_url
+            new_url = prepare_url(new_url, url)
             if new_url not in parsed:
                 to_parse.append(new_url)
             
