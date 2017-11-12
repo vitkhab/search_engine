@@ -7,4 +7,4 @@ COPY ./search.py /search_engine/search.py
 WORKDIR /search_engine
 ENV FLASK_APP=search.py
 
-CMD flask run --host=0.0.0.0 
+ENTRYPOINT ["gunicorn", "search:app", "-b", "0.0.0.0"]
