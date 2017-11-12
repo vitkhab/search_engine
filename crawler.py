@@ -21,7 +21,7 @@ check_page = db.prepare('UPDATE tbl_Pages SET Checked = $2 WHERE ID = $1;')
 new_page_page = db.prepare('INSERT INTO tbl_Pages_Pages VALUES ($1, $2)')
 get_page_page = db.prepare('SELECT * FROM tbl_Pages_Pages WHERE PageID = $1 AND ReferenceID = $2')
 
-rabbit = BlockingConnection(ConnectionParameters(host='rabbit'))
+rabbit = BlockingConnection(ConnectionParameters(host='rabbit',connection_attempts=10,retry_delay=1))
 channel = rabbit.channel()
 channel.queue_declare(queue='urls')
 
