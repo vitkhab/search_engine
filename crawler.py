@@ -1,7 +1,7 @@
 from bs4 import BeautifulSoup
 from requests import get
 from argparse import ArgumentParser
-import re
+from re import findall
 
 def get_page_content(url):
     page = get(url)
@@ -21,7 +21,7 @@ def prepare_text(contents):
     for script in soup(["script", "style"]):
         script.extract()
 
-    return (re.findall(r"[\w']+", soup.get_text()), prepare_links(soup))
+    return (findall(r"[\w']+", soup.get_text()), prepare_links(soup))
 
 
 def parse_page(url):
@@ -40,7 +40,6 @@ if __name__ == "__main__":
     while to_parse:
         url = to_parse.pop()
         (words, urls) = parse_page(url)
-        print(url, words)
         parsed.append(url)
 
         for new_url in urls:
