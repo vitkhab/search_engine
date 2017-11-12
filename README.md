@@ -1,8 +1,13 @@
 # search_engine
 
 # Usage
+## First Run
 ```
-docker-compose up --build
+docker-compose up -d postgres
 docker exec -i searchengine_postgres_1 psql -U postgres < schema.sql
-docker exec -ti searchengine_search_engine_1 python crawler.py https://example.com
+docker-compose up --build --scale crawler=3
+```
+## Later runs
+```
+docker-compose up --build --scale crawler=3
 ```
