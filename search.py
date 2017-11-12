@@ -6,7 +6,7 @@ db = postgresql.open('pq://postgres:postgres@postgres:5432/postgres')
 get_word_id = db.prepare('SELECT ID FROM tbl_Words WHERE Word = $1;')
 get_pages_id = db.prepare('SELECT PageID FROM tbl_Words_Pages WHERE WordID = $1;')
 get_page = db.prepare('SELECT Page FROM tbl_Pages WHERE ID = $1;')
-get_page_score = db.prepare('SELECT COUNT(*) FROM tbl_Pages_Pages WHERE ReferenceID = $1;')
+get_page_score = db.prepare('SELECT COUNT(*) FROM tbl_Pages_Pages WHERE PageID = $1;')
 
 @app.route('/')
 def start():

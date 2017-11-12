@@ -87,5 +87,5 @@ if __name__ == "__main__":
                     new_page(new_url)
                     new_page_id = get_page_id(new_url)
                 new_page_id = new_page_id[0][0]
-                if not get_page_page(page_id, new_page_id):
-                    new_page_page(page_id, new_page_id)
+                if not get_page_page(new_page_id, page_id):
+                    new_page_page(new_page_id, page_id)
