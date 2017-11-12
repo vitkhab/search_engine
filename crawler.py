@@ -4,6 +4,7 @@ from argparse import ArgumentParser
 from re import findall
 from functools import lru_cache
 import postgresql
+import pika
 
 db = postgresql.open('pq://postgres:postgres@postgres:5432/postgres')
 get_word_id = db.prepare('SELECT ID FROM tbl_Words WHERE Word = $1;')
@@ -14,6 +15,10 @@ get_page_id = db.prepare('SELECT ID FROM tbl_Pages WHERE Page = $1;')
 new_page = db.prepare('INSERT INTO tbl_Pages (Page) VALUES ($1)')
 new_page_page = db.prepare('INSERT INTO tbl_Pages_Pages VALUES ($1, $2)')
 get_page_page = db.prepare('SELECT * FROM tbl_Pages_Pages WHERE PageID = $1 AND ReferenceID = $2')
+
+rabbit = pika.BlockingConnection(pika.ConnectionParameters(host='rabbit'))
+channel = rabbit.channel()
+channel.queue_declare(queue='urls')
 
 def get_page_content(url):
     page = get(url)
@@ -68,32 +73,43 @@ def prepare_url(new_url, url):
         new_url = url.strip('/') + '/' + new_url
     return new_url
 
+def callback(ch, method, properties, body):
+    url = body.decode('utf-8')
+    print("Parsing %r" % url)
+    (words, urls) = parse_page(url)
+    print(url, words)
+    parsed.append(url)
+
+    page_id = getsert_page_id(url)
+
+    for word in words:
+        word_id = getsert_word_id(word)
+        if not get_word_page(word_id, page_id):
+            new_word_page(word_id, page_id)
+
+    for new_url in urls:
+        new_url = prepare_url(new_url, url)
+        if new_url not in parsed:
+            channel.basic_publish(exchange='',
+                      routing_key='urls',
+                      body=new_url)
+
+        
+        new_page_id = getsert_page_id(new_url)
+        if not get_page_page(new_page_id, page_id):
+            new_page_page(new_page_id, page_id)
+
 if __name__ == "__main__":
     parser = ArgumentParser(description='Simple web crawler')
     parser.add_argument('url', help='URL to start')
     args = parser.parse_args()
 
-    to_parse = [args.url]
     parsed = []
 
-    while to_parse:
-        url = to_parse.pop()
-        (words, urls) = parse_page(url)
-        print(url, words)
-        parsed.append(url)
-
-        page_id = getsert_page_id(url)
-
-        for word in words:
-            word_id = getsert_word_id(word)
-            if not get_word_page(word_id, page_id):
-                new_word_page(word_id, page_id)
-
-        for new_url in urls:
-            new_url = prepare_url(new_url, url)
-            if new_url not in parsed:
-                to_parse.append(new_url)
-            
-            new_page_id = getsert_page_id(new_url)
-            if not get_page_page(new_page_id, page_id):
-                new_page_page(new_page_id, page_id)
+    channel.basic_publish(exchange='',
+            routing_key='urls',
+            body=args.url)
+    channel.basic_consume(callback,
+                      queue='urls',
+                      no_ack=True)
+    channel.start_consuming()

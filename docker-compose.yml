@@ -8,6 +8,8 @@ services:
       POSTGRES_PASSWORD: postgres
     volumes:
     - pgdata:/var/lib/postgresql/data
+  rabbit:
+    image: rabbitmq:3-alpine
   search_engine:
     image: search_engine
     build: .
