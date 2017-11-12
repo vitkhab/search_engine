@@ -1,0 +1,29 @@
+DROP TABLE IF EXISTS tbl_Pages_Pages;
+DROP TABLE IF EXISTS tbl_Words_Pages;
+DROP TABLE IF EXISTS tbl_Pages;
+DROP TABLE IF EXISTS tbl_Words;
+
+CREATE TABLE tbl_Words
+(	
+	ID SERIAL PRIMARY KEY
+	,Word CHARACTER VARYING 
+);
+
+CREATE TABLE tbl_Pages
+(	
+	ID SERIAL PRIMARY KEY
+	,Page CHARACTER VARYING 
+);
+
+CREATE TABLE tbl_Words_Pages
+(	
+	WordID INT REFERENCES tbl_Words(ID)
+	,PageID INT REFERENCES tbl_Pages(ID)
+);
+
+
+CREATE TABLE tbl_Pages_Pages
+(	
+	PageID INT REFERENCES tbl_Pages(ID)
+	,ReferenceID INT REFERENCES tbl_Pages(ID)
+);
