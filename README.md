@@ -11,3 +11,9 @@ docker-compose up --build --scale crawler=3 --scale web=3
 ```
 docker-compose up --build --scale crawler=3 --scale web=3
 ```
+
+# Testing
+## Performance 
+```
+docker run -ti --rm --network searchengine_default vitkhab/gobench  -k=true -c 500 -t 10 -u  http://balancer/
+```
