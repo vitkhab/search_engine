@@ -10,9 +10,22 @@ services:
     - pgdata:/var/lib/postgresql/data
   rabbit:
     image: rabbitmq:3-alpine
-  search_engine:
-    image: search_engine
-    build: .
+  crawler:
+    image: se/crawler
+    build: 
+      context: .
+      dockerfile: Dockerfile-crawler
+    command: "http://www.example.com"
+    volumes:
+    - ./:/search_engine
+    depends_on:
+    - postgres
+    - rabbit
+  web:
+    image: se/web
+    build: 
+      context: .
+      dockerfile: Dockerfile-web
     ports:
     - 5000:5000
     environment:
