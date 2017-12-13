@@ -11,18 +11,21 @@ services:
   rabbit:
     image: rabbitmq:3-alpine
   crawler:
-    image: se/crawler
+    image: vitkhab/crawler
     build: 
       context: .
       dockerfile: Dockerfile-crawler
-    command: "http://www.example.com"
+    command: "https://vitkhab.github.io/search_engine_test_site/"
+    environment:
+      EXCLUDE_URLS: .*github.com,.*jekyllrb.com
+      CHECK_INTERVAL: 1
     volumes:
     - ./:/search_engine
     depends_on:
     - postgres
     - rabbit
   web:
-    image: se/web
+    image: vitkhab/web
     build: 
       context: .
       dockerfile: Dockerfile-web

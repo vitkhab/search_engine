@@ -1,20 +1,23 @@
 from bs4 import BeautifulSoup
 from requests import get
 from argparse import ArgumentParser
-from re import findall
+from re import findall, match
 from functools import lru_cache
 from time import time
 from postgresql import open as pg_open
 from pika import BlockingConnection, ConnectionParameters
+from os import getenv
 
-CHECK_INTERVAL = 86400
+CHECK_INTERVAL = int(getenv('CHECK_INTERVAL', 86400))
+
+exclude_urls = list(filter(None, getenv('EXCLUDE_URLS', '').split(',')))
 
 db = pg_open('pq://{0}:{1}@{2}:{3}/{4}'.format(
-    os.getenv('DB_USER', 'postgres'),
-    os.getenv('DB_PASSWORD', 'postgres'),
-    os.getenv('DB_HOST', 'postgres'),
-    os.getenv('DB_PORT', '5432'),
-    os.getenv('DB_NAME', 'postgres')
+    getenv('DB_USER', 'postgres'),
+    getenv('DB_PASSWORD', 'postgres'),
+    getenv('DB_HOST', 'postgres'),
+    getenv('DB_PORT', '5432'),
+    getenv('DB_NAME', 'postgres')
 ))
 get_word_id = db.prepare('SELECT ID FROM tbl_Words WHERE Word = $1;')
 new_word = db.prepare('INSERT INTO tbl_Words (Word) VALUES ($1)')
@@ -28,7 +31,7 @@ new_page_page = db.prepare('INSERT INTO tbl_Pages_Pages VALUES ($1, $2)')
 get_page_page = db.prepare('SELECT * FROM tbl_Pages_Pages WHERE PageID = $1 AND ReferenceID = $2')
 
 rabbit = BlockingConnection(ConnectionParameters(
-    host=os.getenv('RMQ_HOST', 'rabbit'),
+    host=getenv('RMQ_HOST', 'rabbit'),
     connection_attempts=10,
     retry_delay=1))
 channel = rabbit.channel()
@@ -97,6 +100,11 @@ def prepare_url(new_url, url):
 
 def callback(ch, method, properties, body):
     url = body.decode('utf-8')
+    for exclude in exclude_urls:
+        if match(exclude, url):
+            channel.basic_ack(method.delivery_tag)
+            print("Excluded %r" % url)
+            return
     print("Parsing %r" % url)
 
     (page_id, checked) = getsert_page(url)
@@ -109,9 +117,7 @@ def callback(ch, method, properties, body):
 
         for new_url in urls:
             new_url = prepare_url(new_url, url)
-            channel.basic_publish(exchange='',
-                        routing_key='urls',
-                        body=new_url)
+            publish_url(new_url)
 
             new_page_id = getsert_page_id(new_url)
             if not get_page_page(new_page_id, page_id):
@@ -120,14 +126,17 @@ def callback(ch, method, properties, body):
     channel.basic_ack(method.delivery_tag)
     check_page(page_id, int(time()))
 
+def publish_url(url):
+    channel.basic_publish(exchange='',
+                          routing_key='urls',
+                          body=url)
+
 if __name__ == "__main__":
     parser = ArgumentParser(description='Simple web crawler')
     parser.add_argument('url', help='URL to start')
     args = parser.parse_args()
-
-    channel.basic_publish(exchange='',
-            routing_key='urls',
-            body=args.url)
+    
+    publish_url(args.url)
     channel.basic_consume(callback,
                       queue='urls')
     channel.start_consuming()
