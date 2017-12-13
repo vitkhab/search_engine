@@ -1,4 +1,4 @@
-from flask import Flask, request, g
+from flask import Flask, request, g, render_template
 import postgresql
 import time
 import os
@@ -23,17 +23,11 @@ def before_request():
 
 @app.route('/')
 def start():
-    search_query = '''
-    <form action="/" method="get">
-    <input name="query">
-    <input type="submit">
-    </form>
-    '''
     word = request.args.get('query', '')
     if word:
         word_id = get_word_id(word)
         if not word_id:
-            return search_query + 'Not found'
+            return render_template('index.html', gen_time=g.request_time(), result=None)
         word_id = word_id[0][0]
         pages = []
         for id in get_pages_id(word_id):
@@ -41,7 +35,6 @@ def start():
             score = get_page_score(id[0])[0][0]
             pages.append((score, url))
         pages.sort(reverse=True)
-        search_query += '<br>'.join(['{} links to <a href="{}">{}</a>'.format(s, u, u) for (s, u) in pages])
+        return render_template('index.html', gen_time=g.request_time(), result=pages) 
 
-    search_query += '<br>Webpage generated in {}'.format(g.request_time())
-    return search_query 
+    return render_template('index.html', gen_time=g.request_time())
