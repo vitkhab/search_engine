@@ -37,7 +37,7 @@ def start():
     for word in phrase:
         word_id = get_word_id(word)
         if not word_id:
-            continue
+            return render_template('index.html', gen_time=g.request_time())
         word_ids.append(word_id[0][0])
     
     pages_ids = {}
