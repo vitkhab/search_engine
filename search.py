@@ -1,8 +1,15 @@
 from flask import Flask, request, g
 import postgresql
 import time
+import os
 app = Flask(__name__)
-db = postgresql.open('pq://postgres:postgres@postgres:5432/postgres')
+db = postgresql.open('pq://{0}:{1}@{2}:{3}/{4}'.format(
+    os.getenv('DB_USER', 'postgres'),
+    os.getenv('DB_PASSWORD', 'postgres'),
+    os.getenv('DB_HOST', 'postgres'),
+    os.getenv('DB_PORT', '5432'),
+    os.getenv('DB_NAME', 'postgres')
+))
 
 get_word_id = db.prepare('SELECT ID FROM tbl_Words WHERE Word = $1;')
 get_pages_id = db.prepare('SELECT PageID FROM tbl_Words_Pages WHERE WordID = $1;')

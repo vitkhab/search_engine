@@ -9,7 +9,13 @@ from pika import BlockingConnection, ConnectionParameters
 
 CHECK_INTERVAL = 86400
 
-db = pg_open('pq://postgres:postgres@postgres:5432/postgres')
+db = pg_open('pq://{0}:{1}@{2}:{3}/{4}'.format(
+    os.getenv('DB_USER', 'postgres'),
+    os.getenv('DB_PASSWORD', 'postgres'),
+    os.getenv('DB_HOST', 'postgres'),
+    os.getenv('DB_PORT', '5432'),
+    os.getenv('DB_NAME', 'postgres')
+))
 get_word_id = db.prepare('SELECT ID FROM tbl_Words WHERE Word = $1;')
 new_word = db.prepare('INSERT INTO tbl_Words (Word) VALUES ($1)')
 new_word_page = db.prepare('INSERT INTO tbl_Words_Pages VALUES ($1, $2)')
@@ -21,7 +27,10 @@ check_page = db.prepare('UPDATE tbl_Pages SET Checked = $2 WHERE ID = $1;')
 new_page_page = db.prepare('INSERT INTO tbl_Pages_Pages VALUES ($1, $2)')
 get_page_page = db.prepare('SELECT * FROM tbl_Pages_Pages WHERE PageID = $1 AND ReferenceID = $2')
 
-rabbit = BlockingConnection(ConnectionParameters(host='rabbit',connection_attempts=10,retry_delay=1))
+rabbit = BlockingConnection(ConnectionParameters(
+    host=os.getenv('RMQ_HOST', 'rabbit'),
+    connection_attempts=10,
+    retry_delay=1))
 channel = rabbit.channel()
 channel.queue_declare(queue='urls')
 
