@@ -116,12 +116,13 @@ def parse_page(url):
     try:
         contents = get_page_content(url)
     except Exception as e:
-         log.error('parse_page',
+        log.error('parse_page',
                    service="crawler",
                    params=  {'url': url},
                    message="Failed",
                    traceback=traceback.format_exc()
                   )
+        return (None, None)
     else:
         log.info('parse_page',
                   service='crawler',
@@ -181,6 +182,9 @@ def callback(ch, method, properties, body):
     (page_id, checked) = getsert_page(url)
     if not checked or time() - checked > CHECK_INTERVAL:
         (words, urls) = parse_page(url)
+        if not words and not urls:
+            channel.basic_nack(method.delivery_tag)
+            return
         for word in words:
             word_id = getsert_word_id(word)
             if not get_word_page(word_id, page_id):
