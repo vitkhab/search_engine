@@ -24,7 +24,6 @@ structlog.configure(processors=[
      structlog.processors.JSONRenderer(sort_keys=True)
  ])
 
-
 CHECK_INTERVAL = int(getenv('CHECK_INTERVAL', 86400))
 
 exclude_urls = list(filter(None, getenv('EXCLUDE_URLS', '').split(',')))
@@ -38,6 +37,7 @@ db_creds = {
 }
 
 mqhost = getenv('RMQ_HOST', 'rabbit')
+mqqueue = getenv('RMQ_QUEUE', 'urls')
 try:
     db = pg_open('pq://{0}:{1}@{2}:{3}/{4}'.format(
         db_creds["user"],
@@ -89,7 +89,7 @@ else:
             )
 
 channel = rabbit.channel()
-channel.queue_declare(queue='urls')
+channel.queue_declare(queue=mqqueue)
 
 
 def get_page_content(url):
@@ -113,8 +113,23 @@ def prepare_text(contents):
     return (findall(r"[\w']+", soup.get_text()), prepare_links(soup))
 
 def parse_page(url):
-    contents = get_page_content(url)
-    return prepare_text(contents)
+    try:
+        contents = get_page_content(url)
+    except Exception as e:
+         log.error('parse_page',
+                   service="crawler",
+                   params=  {'url': url},
+                   message="Failed",
+                   traceback=traceback.format_exc()
+                  )
+    else:
+        log.info('parse_page',
+                  service='crawler',
+                  params={'url': url},
+                  message="Success"
+                 )
+        return prepare_text(contents)
+
 
 @lru_cache(maxsize=2**32)
 def getsert_page_id(page):
@@ -156,7 +171,7 @@ def callback(ch, method, properties, body):
     for exclude in exclude_urls:
         if match(exclude, url):
             channel.basic_ack(method.delivery_tag)
-            log.info('page_excluding',
+            log.info('exclude_page',
                       service='crawler',
                       url=url,
                       message="Page excluded"
@@ -165,41 +180,41 @@ def callback(ch, method, properties, body):
 
     (page_id, checked) = getsert_page(url)
     if not checked or time() - checked > CHECK_INTERVAL:
-        try:
-            (words, urls) = parse_page(url)
-        except Exception as e:
-             log.error('page_parsing',
-                       service="crawler",
-                       url=url,
-                       message="Failed",
-                       traceback=traceback.format_exc(e)
-                      )
-        else:
-            log.info('page_parsing',
-                      service='crawler',
-                      url=url,
-                      message="Success"
-                     )
-            for word in words:
-                word_id = getsert_word_id(word)
-                if not get_word_page(word_id, page_id):
-                    new_word_page(word_id, page_id)
+        (words, urls) = parse_page(url)
+        for word in words:
+            word_id = getsert_word_id(word)
+            if not get_word_page(word_id, page_id):
+                new_word_page(word_id, page_id)
 
-            for new_url in urls:
-                new_url = prepare_url(new_url, url)
-                publish_url(new_url)
-
-                new_page_id = getsert_page_id(new_url)
-                if not get_page_page(new_page_id, page_id):
-                    new_page_page(new_page_id, page_id)
+        for new_url in urls:
+            new_url = prepare_url(new_url, url)
+            publish_url(new_url)
+            new_page_id = getsert_page_id(new_url)
+            if not get_page_page(new_page_id, page_id):
+                new_page_page(new_page_id, page_id)
 
     channel.basic_ack(method.delivery_tag)
     check_page(page_id, int(time()))
 
 def publish_url(url):
-    channel.basic_publish(exchange='',
-                          routing_key='urls',
-                          body=url)
+    try:
+        channel.basic_publish(exchange='',
+                              routing_key='urls',
+                              body=url)
+    except Exception as e:
+        log.error('publish_url',
+                  service="crawler",
+                  params={'url': url},
+                  message="Failed to publish URL in MQ",
+                  traceback=traceback.format_exc())
+    else:
+        log.info('publish_url',
+                  service='crawler',
+                  params={'url': url},
+                  message="Successfully published URL in MQ"
+                 )
+
+
 
 if __name__ == "__main__":
     parser = ArgumentParser(description='Simple web crawler')
@@ -208,5 +223,5 @@ if __name__ == "__main__":
 
     publish_url(args.url)
     channel.basic_consume(callback,
-                      queue='urls')
+                      queue=mqqueue)
     channel.start_consuming()
