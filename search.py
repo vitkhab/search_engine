@@ -6,6 +6,11 @@ from postgresql import open as pg_open
 import time
 import structlog
 import traceback
+import prometheus_client
+
+CONTENT_TYPE_LATEST = str('text/plain; version=0.0.4; charset=utf-8')
+COUNTER_PAGES_SERVED = prometheus_client.Counter('web_pages_served', 'Number of pages served by frontend')
+HISTOGRAM_PAGE_GEN_TIME = prometheus_client.Histogram('web_page_gen_time', 'Page generation time')
 
 logg = logging.getLogger('werkzeug')
 logg.disabled = True   # disable default logger
@@ -61,15 +66,25 @@ def intersect(a, b):
 @app.before_request
 def before_request():
     g.request_start_time = time.time()
-    g.request_time = lambda: "%.5fs" % (time.time() - g.request_start_time)
+    g.request_time = lambda: (time.time() - g.request_start_time)
+
+@app.after_request
+def after_request(response):
+    HISTOGRAM_PAGE_GEN_TIME.observe(g.request_time())
+    return response
 
 # @app.route('/metrics')
 # def metrics():
 #     return Response(prometheus_client.generate_latest(), mimetype=CONTENT_TYPE_LATEST)
 
+@app.route('/metrics')
+def metrics():
+    return Response(prometheus_client.generate_latest(), mimetype=CONTENT_TYPE_LATEST)
+
 @app.route('/')
 def start():
     phrase = request.args.get('query', '').split()
+    COUNTER_PAGES_SERVED.inc()
 
     if not phrase:
         return render_template('index.html', gen_time=g.request_time())

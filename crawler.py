@@ -10,6 +10,11 @@ from os import getenv
 import structlog
 import logging
 import traceback
+import prometheus_client
+
+PAGE_PARSED = prometheus_client.Counter('pages_parsed', 'Number of pages parsed by crawler')
+HISTOGRAM_SITE_CONNECTION_TIME = prometheus_client.Histogram('crawler_site_connection_time', 'How much time it took for crawler to get page')
+HISTOGRAM_PAGE_PARSE_TIME = prometheus_client.Histogram('crawler_page_parse_time', 'How much time it took to parse a page')
 
 logg = logging.getLogger('werkzeug')
 logg.disabled = True   # disable default logger
@@ -93,7 +98,10 @@ channel.queue_declare(queue=mqqueue)
 
 
 def get_page_content(url):
+    start_time = time()
     page = get(url)
+    stop_time = time()
+    HISTOGRAM_SITE_CONNECTION_TIME.observe(stop_time - start_time)
     return page.content
 
 def prepare_links(soup):
@@ -105,12 +113,16 @@ def prepare_links(soup):
     return links
 
 def prepare_text(contents):
+    start_time = time()
     soup = BeautifulSoup(contents, 'html.parser')
 
     for script in soup(["script", "style"]):
         script.extract()
 
-    return (findall(r"[\w']+", soup.get_text()), prepare_links(soup))
+    res = (findall(r"[\w']+", soup.get_text()), prepare_links(soup))
+    stop_time = time()
+    HISTOGRAM_PAGE_PARSE_TIME.observe(stop_time - start_time)
+    return res
 
 def parse_page(url):
     try:
@@ -124,6 +136,7 @@ def parse_page(url):
                   )
         return (None, None)
     else:
+        PAGE_PARSED.inc()
         log.info('parse_page',
                   service='crawler',
                   params={'url': url},
@@ -224,6 +237,7 @@ if __name__ == "__main__":
     parser = ArgumentParser(description='Simple web crawler')
     parser.add_argument('url', help='URL to start')
     args = parser.parse_args()
+    prometheus_client.start_http_server(8000)
 
     publish_url(args.url)
     channel.basic_consume(callback,
