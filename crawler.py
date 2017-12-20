@@ -7,18 +7,59 @@ from time import time
 from postgresql import open as pg_open
 from pika import BlockingConnection, ConnectionParameters
 from os import getenv
+import structlog
+import logging
+import traceback
+
+logg = logging.getLogger('werkzeug')
+logg.disabled = True   # disable default logger
+
+log = structlog.get_logger()
+structlog.configure(processors=[
+     structlog.processors.TimeStamper(fmt="%Y-%m-%d %H:%M:%S"),
+     structlog.stdlib.add_log_level,
+     # to see indented logs in the terminal, uncomment the line below
+     # structlog.processors.JSONRenderer(indent=2, sort_keys=True)
+     # and comment out the one below
+     structlog.processors.JSONRenderer(sort_keys=True)
+ ])
+
 
 CHECK_INTERVAL = int(getenv('CHECK_INTERVAL', 86400))
 
 exclude_urls = list(filter(None, getenv('EXCLUDE_URLS', '').split(',')))
 
-db = pg_open('pq://{0}:{1}@{2}:{3}/{4}'.format(
-    getenv('DB_USER', 'postgres'),
-    getenv('DB_PASSWORD', 'postgres'),
-    getenv('DB_HOST', 'postgres'),
-    getenv('DB_PORT', '5432'),
-    getenv('DB_NAME', 'postgres')
-))
+db_creds = {
+    "user": getenv('DB_USER', 'postgres'),
+    "password": getenv('DB_PASSWORD', 'postgres'),
+    "host": getenv('DB_HOST', 'postgres'),
+    "port": getenv('DB_PORT', '5432'),
+    "database": getenv('DB_NAME', 'postgres')
+}
+
+mqhost = getenv('RMQ_HOST', 'rabbit')
+try:
+    db = pg_open('pq://{0}:{1}@{2}:{3}/{4}'.format(
+        db_creds["user"],
+        db_creds["password"],
+        db_creds["host"],
+        db_creds["port"],
+        db_creds["database"]
+    ))
+except Exception as e:
+    log.error('connect_db',
+              service="crawler",
+              message="Failed connect to Database",
+              traceback=traceback.format_exc(),
+              db_creds=db_creds)
+else:
+    log.info('connect_to_db',
+              service="crawler",
+              message='Successfully connected to database host {}'.format(db_creds['host']),
+              db_creds=db_creds
+            )
+
+
 get_word_id = db.prepare('SELECT ID FROM tbl_Words WHERE Word = $1;')
 new_word = db.prepare('INSERT INTO tbl_Words (Word) VALUES ($1)')
 new_word_page = db.prepare('INSERT INTO tbl_Words_Pages VALUES ($1, $2)')
@@ -30,12 +71,26 @@ check_page = db.prepare('UPDATE tbl_Pages SET Checked = $2 WHERE ID = $1;')
 new_page_page = db.prepare('INSERT INTO tbl_Pages_Pages VALUES ($1, $2)')
 get_page_page = db.prepare('SELECT * FROM tbl_Pages_Pages WHERE PageID = $1 AND ReferenceID = $2')
 
-rabbit = BlockingConnection(ConnectionParameters(
-    host=getenv('RMQ_HOST', 'rabbit'),
-    connection_attempts=10,
-    retry_delay=1))
+try:
+    rabbit = BlockingConnection(ConnectionParameters(
+        host=mqhost,
+        connection_attempts=10,
+        retry_delay=1))
+except Exception as e:
+    log.error('connect_to_MQ',
+              service="crawler",
+              message="Failed connect to MQ",
+              traceback=traceback.format_exc()
+              )
+else:
+    log.info('connect_to_MQ',
+              service="crawler",
+              message='Successfully connected to MQ host {}'.format(mqhost)
+            )
+
 channel = rabbit.channel()
 channel.queue_declare(queue='urls')
+
 
 def get_page_content(url):
     page = get(url)
@@ -57,10 +112,8 @@ def prepare_text(contents):
 
     return (findall(r"[\w']+", soup.get_text()), prepare_links(soup))
 
-
 def parse_page(url):
     contents = get_page_content(url)
-
     return prepare_text(contents)
 
 @lru_cache(maxsize=2**32)
@@ -103,25 +156,42 @@ def callback(ch, method, properties, body):
     for exclude in exclude_urls:
         if match(exclude, url):
             channel.basic_ack(method.delivery_tag)
-            print("Excluded %r" % url)
+            log.info('page_excluding',
+                      service='crawler',
+                      url=url,
+                      message="Page excluded"
+                     )
             return
-    print("Parsing %r" % url)
 
     (page_id, checked) = getsert_page(url)
     if not checked or time() - checked > CHECK_INTERVAL:
-        (words, urls) = parse_page(url)
-        for word in words:
-            word_id = getsert_word_id(word)
-            if not get_word_page(word_id, page_id):
-                new_word_page(word_id, page_id)
+        try:
+            (words, urls) = parse_page(url)
+        except Exception as e:
+             log.error('page_parsing',
+                       service="crawler",
+                       url=url,
+                       message="Failed",
+                       traceback=traceback.format_exc(e)
+                      )
+        else:
+            log.info('page_parsing',
+                      service='crawler',
+                      url=url,
+                      message="Success"
+                     )
+            for word in words:
+                word_id = getsert_word_id(word)
+                if not get_word_page(word_id, page_id):
+                    new_word_page(word_id, page_id)
 
-        for new_url in urls:
-            new_url = prepare_url(new_url, url)
-            publish_url(new_url)
+            for new_url in urls:
+                new_url = prepare_url(new_url, url)
+                publish_url(new_url)
 
-            new_page_id = getsert_page_id(new_url)
-            if not get_page_page(new_page_id, page_id):
-                new_page_page(new_page_id, page_id)
+                new_page_id = getsert_page_id(new_url)
+                if not get_page_page(new_page_id, page_id):
+                    new_page_page(new_page_id, page_id)
 
     channel.basic_ack(method.delivery_tag)
     check_page(page_id, int(time()))
@@ -135,7 +205,7 @@ if __name__ == "__main__":
     parser = ArgumentParser(description='Simple web crawler')
     parser.add_argument('url', help='URL to start')
     args = parser.parse_args()
-    
+
     publish_url(args.url)
     channel.basic_consume(callback,
                       queue='urls')

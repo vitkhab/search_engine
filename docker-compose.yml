@@ -12,7 +12,7 @@ services:
     image: rabbitmq:3-alpine
   crawler:
     image: vitkhab/crawler
-    build: 
+    build:
       context: .
       dockerfile: Dockerfile-crawler
     command: "https://vitkhab.github.io/search_engine_test_site/"
@@ -26,7 +26,7 @@ services:
     - rabbit
   web:
     image: vitkhab/web
-    build: 
+    build:
       context: .
       dockerfile: Dockerfile-web
     command: --reload
