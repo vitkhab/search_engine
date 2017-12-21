@@ -78,15 +78,6 @@ def before_request():
     g.db = g.db_connection.search_engine
     g.request_time = lambda: (time.time() - g.request_start_time)
 
-@app.after_request
-def after_request(response):
-    HISTOGRAM_PAGE_GEN_TIME.observe(g.request_time())
-    return response
-
-# @app.route('/metrics')
-# def metrics():
-#     return Response(prometheus_client.generate_latest(), mimetype=CONTENT_TYPE_LATEST)
-
 @app.route('/metrics')
 def metrics():
     return Response(prometheus_client.generate_latest(), mimetype=CONTENT_TYPE_LATEST)
@@ -124,6 +115,7 @@ def start():
 
 @app.after_request
 def after_request(response):
+    HISTOGRAM_PAGE_GEN_TIME.observe(g.request_time())
     request_id = request.headers['Request-Id'] \
         if 'Request-Id' in request.headers else uuid.uuid4()
     log.info('request',
