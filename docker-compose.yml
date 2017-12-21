@@ -17,6 +17,8 @@ services:
     depends_on:
     - mongo
     - rabbit
+    ports:
+    - 8000:8000
   web:
     image: vitkhab/web
     build:
