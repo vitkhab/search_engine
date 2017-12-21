@@ -7,9 +7,51 @@ from time import time
 from postgresql import open as pg_open
 from pika import BlockingConnection, ConnectionParameters
 from os import getenv
+from pymongo import MongoClient
+from bson.objectid import ObjectId
 import structlog
 import logging
 import traceback
+
+def connect_db():
+    try:
+        db = MongoClient(
+            getenv('MONGO', 'mongo'),
+            int(getenv('MONGO_PORT', '27017'))
+        )
+        db.admin.command('ismaster')
+    except Exception as e:
+        log.error('connect_db',
+                  service='crawler',
+                  message="Failed connect to Database",
+                  traceback=traceback.format_exc(e),
+                  )
+    else:
+        log.info('connect_to_db',
+                  service='crawler',
+                  message='Successfully connected to database',
+                )
+        return db
+
+def connect_to_mq():
+    try:
+        rabbit = BlockingConnection(ConnectionParameters(
+            host=mqhost,
+            connection_attempts=10,
+            retry_delay=1))
+    except Exception as e:
+        log.error('connect_to_MQ',
+                  service="crawler",
+                  message="Failed connect to MQ",
+                  traceback=traceback.format_exc()
+                  )
+    else:
+        log.info('connect_to_MQ',
+                  service="crawler",
+                  message='Successfully connected to MQ host {}'.format(mqhost)
+                )
+        return rabbit.channel()
+
 
 logg = logging.getLogger('werkzeug')
 logg.disabled = True   # disable default logger
@@ -28,69 +70,54 @@ CHECK_INTERVAL = int(getenv('CHECK_INTERVAL', 86400))
 
 exclude_urls = list(filter(None, getenv('EXCLUDE_URLS', '').split(',')))
 
-db_creds = {
-    "user": getenv('DB_USER', 'postgres'),
-    "password": getenv('DB_PASSWORD', 'postgres'),
-    "host": getenv('DB_HOST', 'postgres'),
-    "port": getenv('DB_PORT', '5432'),
-    "database": getenv('DB_NAME', 'postgres')
-}
-
 mqhost = getenv('RMQ_HOST', 'rabbit')
 mqqueue = getenv('RMQ_QUEUE', 'urls')
-try:
-    db = pg_open('pq://{0}:{1}@{2}:{3}/{4}'.format(
-        db_creds["user"],
-        db_creds["password"],
-        db_creds["host"],
-        db_creds["port"],
-        db_creds["database"]
-    ))
-except Exception as e:
-    log.error('connect_db',
-              service="crawler",
-              message="Failed connect to Database",
-              traceback=traceback.format_exc(),
-              db_creds=db_creds)
-else:
-    log.info('connect_to_db',
-              service="crawler",
-              message='Successfully connected to database host {}'.format(db_creds['host']),
-              db_creds=db_creds
-            )
 
+def new_word(word):
+    return db.words.insert( {'word': word})
 
-get_word_id = db.prepare('SELECT ID FROM tbl_Words WHERE Word = $1;')
-new_word = db.prepare('INSERT INTO tbl_Words (Word) VALUES ($1)')
-new_word_page = db.prepare('INSERT INTO tbl_Words_Pages VALUES ($1, $2)')
-get_word_page = db.prepare('SELECT * FROM tbl_Words_Pages WHERE WordID = $1 AND PageID = $2')
-get_page = db.prepare('SELECT (ID, Checked) FROM tbl_Pages WHERE Page = $1;')
-get_page_id = db.prepare('SELECT ID FROM tbl_Pages WHERE Page = $1;')
-new_page = db.prepare('INSERT INTO tbl_Pages (Page) VALUES ($1)')
-check_page = db.prepare('UPDATE tbl_Pages SET Checked = $2 WHERE ID = $1;')
-new_page_page = db.prepare('INSERT INTO tbl_Pages_Pages VALUES ($1, $2)')
-get_page_page = db.prepare('SELECT * FROM tbl_Pages_Pages WHERE PageID = $1 AND ReferenceID = $2')
+def get_word(word):
+    return db.pages.find_one( {'word': word }  )
 
-try:
-    rabbit = BlockingConnection(ConnectionParameters(
-        host=mqhost,
-        connection_attempts=10,
-        retry_delay=1))
-except Exception as e:
-    log.error('connect_to_MQ',
-              service="crawler",
-              message="Failed connect to MQ",
-              traceback=traceback.format_exc()
-              )
-else:
-    log.info('connect_to_MQ',
-              service="crawler",
-              message='Successfully connected to MQ host {}'.format(mqhost)
-            )
+def get_word_id(word):
+    search = get_word(word)
+    if search and '_id' in search:
+        return search['_id']
+    return search
 
-channel = rabbit.channel()
-channel.queue_declare(queue=mqqueue)
+def new_word_page(word_id,page_id):
+    db.words.find_one_and_update( {'_id': word_id }, { '$addToSet': { 'ref_pages': page_id }} )
 
+def get_word_page(word_id,page_id):
+    search = db.words.find_one({ '_id': word_id })
+    if search and 'ref_pages' in search:
+        return page_id in search['ref_pages']
+    return False
+
+def get_page(url):
+    return db.pages.find_one( {'url': url} )
+
+def get_page_id(url):
+    search = get_page(url)
+    print(search)
+    if search and '_id' in search:
+        return search['_id']
+    return search
+
+def new_page(url):
+    return db.pages.insert( {'url': url, 'checked': ''} )
+
+def set_check_page(page_id,check):
+    db.pages.find_one_and_update( {'id': page_id }, {'$set': {'checked': check } })
+
+def new_page_page(page_id, ref_page_id):
+    db.pages.find_one_and_update({'_id': page_id }, { '$addToSet': {'ref_pages': ref_page_id }})
+
+def get_page_page(page_id,ref_page_id):
+    search = db.pages.find_one( {'_id': page_id} )
+    if search and 'ref_pages' in search:
+        return ref_page_id in search['ref_pages']
+    return False
 
 def get_page_content(url):
     page = get(url)
@@ -135,25 +162,27 @@ def parse_page(url):
 def getsert_page_id(page):
     page_id = get_page_id(page)
     if not page_id:
-        new_page(page)
-        page_id = get_page_id(page)
-    return page_id[0][0]
+        page_id = new_page(page)
+    return page_id
+
 
 @lru_cache(maxsize=2**32)
 def getsert_page(page):
-    page_attrs = get_page(page)
-    if not page_attrs:
-        new_page(page)
-        page_attrs = get_page(page)
-    return (page_attrs[0][0][0], page_attrs[0][0][1])
+    page_obj = get_page(page)
+    if not page_obj:
+        page_id = new_page(page)
+        checked = ''
+    else:
+        page_id = page_obj['_id']
+        checked = page_obj['checked']
+    return (page_id,checked)
 
 @lru_cache(maxsize=2**32)
 def getsert_word_id(word):
     word_id = get_word_id(word)
     if not word_id:
-        new_word(word)
-        word_id = get_word_id(word)
-    return word_id[0][0]
+        word_id = new_word(word)
+    return word_id
 
 def prepare_url(new_url, url):
     if new_url.startswith('http'):
@@ -167,10 +196,13 @@ def prepare_url(new_url, url):
     return new_url
 
 def callback(ch, method, properties, body):
+    global db
+    db_connection = connect_db()
+    db = db_connection.search_engine
     url = body.decode('utf-8')
     for exclude in exclude_urls:
         if match(exclude, url):
-            channel.basic_ack(method.delivery_tag)
+            ch.basic_ack(method.delivery_tag)
             log.info('exclude_page',
                       service='crawler',
                       url=url,
@@ -194,7 +226,9 @@ def callback(ch, method, properties, body):
                 new_page_page(new_page_id, page_id)
 
     channel.basic_ack(method.delivery_tag)
-    check_page(page_id, int(time()))
+    set_check_page(page_id, int(time()))
+    db_connection.close()
+
 
 def publish_url(url):
     try:
@@ -214,13 +248,13 @@ def publish_url(url):
                   message="Successfully published URL in MQ"
                  )
 
-
-
 if __name__ == "__main__":
+
+    channel = connect_to_mq()
+    channel.queue_declare(queue=mqqueue)
     parser = ArgumentParser(description='Simple web crawler')
     parser.add_argument('url', help='URL to start')
     args = parser.parse_args()
-
     publish_url(args.url)
     channel.basic_consume(callback,
                       queue=mqqueue)

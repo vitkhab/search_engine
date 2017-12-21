@@ -5,6 +5,7 @@ import uuid
 from postgresql import open as pg_open
 import time
 import structlog
+from pymongo import MongoClient
 import traceback
 
 logg = logging.getLogger('werkzeug')
@@ -20,40 +21,47 @@ structlog.configure(processors=[
      structlog.processors.JSONRenderer(sort_keys=True)
  ])
 
-db_creds = {
-    "user": getenv('DB_USER', 'postgres'),
-    "password": getenv('DB_PASSWORD', 'postgres'),
-    "host": getenv('DB_HOST', 'postgres'),
-    "port": getenv('DB_PORT', '5432'),
-    "database": getenv('DB_NAME', 'postgres')
-}
-
 app = Flask(__name__)
-try:
-    db = pg_open('pq://{0}:{1}@{2}:{3}/{4}'.format(
-        db_creds["user"],
-        db_creds["password"],
-        db_creds["host"],
-        db_creds["port"],
-        db_creds["database"]
-    ))
-except Exception as e:
-    log.error('connect_db',
-              service='web',
-              message="Failed connect to Database",
-              traceback=traceback.format_exc(e),
-              db_creds=db_creds)
-else:
-    log.info('connect_to_db',
-              service='web',
-              message='Successfully connected to database',
-              db_creds=db_creds
-            )
+def connect_db():
+    try:
+        db = MongoClient(
+            getenv('MONGO', 'mongo'),
+            int(getenv('MONGO_PORT', '27017'))
+        )
+        db.admin.command('ismaster')
+    except Exception as e:
+        log.error('connect_db',
+                  service='crawler',
+                  message="Failed connect to Database",
+                  traceback=traceback.format_exc(e),
+                  )
+    else:
+        log.info('connect_to_db',
+                  service='crawler',
+                  message='Successfully connected to database',
+                )
+        return db
 
-get_word_id = db.prepare('SELECT ID FROM tbl_Words WHERE Word = $1;')
-get_pages_id = db.prepare('SELECT PageID FROM tbl_Words_Pages WHERE WordID = $1;')
-get_page = db.prepare('SELECT Page FROM tbl_Pages WHERE ID = $1;')
-get_page_score = db.prepare('SELECT COUNT(*) FROM tbl_Pages_Pages WHERE PageID = $1;')
+def get_word(word):
+    return g.db.words.find_one( {'word': word }  )
+
+def get_word_id(word):
+    search = get_word(word)
+    if search and '_id' in search:
+        return search['_id']
+    return None
+
+def get_pages_id (word_id):
+    search = g.db.words.find_one({ '_id': word_id })
+    if search and 'ref_pages' in search:
+        return search['ref_pages']
+    return None
+
+def get_page_by_id (page_id):
+    return g.db.pages.find_one( {'_id': page_id} )
+
+def get_page_score (page_id):
+    return len(g.db.pages.find_one({ '_id': page_id })['ref_pages'])
 
 def intersect(a, b):
     return list(set(a) & set(b))
@@ -62,6 +70,8 @@ def intersect(a, b):
 def before_request():
     g.request_start_time = time.time()
     g.request_time = lambda: "%.5fs" % (time.time() - g.request_start_time)
+    g.db_connection = connect_db()
+    g.db = g.db_connection.search_engine
 
 # @app.route('/metrics')
 # def metrics():
@@ -77,9 +87,10 @@ def start():
     word_ids = []
     for word in phrase:
         word_id = get_word_id(word)
+        print(word_id)
         if not word_id:
             return render_template('index.html', gen_time=g.request_time())
-        word_ids.append(word_id[0][0])
+        word_ids.append(word_id)
 
     pages_ids = {}
     for word_id in word_ids:
@@ -88,9 +99,9 @@ def start():
     pages = reduce(intersect, [pages_ids[word_id] for word_id in pages_ids])
 
     res = []
-    for id in pages:
-        url = get_page(id[0])[0][0]
-        score = get_page_score(id[0])[0][0]
+    for page_id in pages:
+        url = get_page_by_id(page_id)['url']
+        score = get_page_score(page_id)
         res.append((score, url))
     res.sort(reverse=True)
 
@@ -109,6 +120,11 @@ def after_request(response):
              method=request.method,
              response_status=response.status_code)
     return response
+
+@app.teardown_appcontext
+def close_db(error):
+    if hasattr(g, 'db_connection'):
+        g.db_connection.close()
 
 # Log Exceptions
 @app.errorhandler(Exception)
