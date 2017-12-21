@@ -18,6 +18,12 @@ docker-compose up --scale crawler=3 crawler
 ```
 
 # Testing
+## Unit testing and coverage
+```
+pip install -r requirements-crawler.txt -r requirements-web.txt -r requirements-test.txt
+PYTHONPATH=. coverage run -m unittest discover -s tests/ 
+coverage report --include crawler.py,search.py
+```
 ## Performance 
 ```
 docker run -ti --rm vitkhab/gobench -k=true -c 500 -t 10 -u  http://35.190.15.45/?query=search
